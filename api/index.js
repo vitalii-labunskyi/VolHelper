@@ -1,13 +1,6 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { sequelize } = require('../models/database');
-
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json());
 
 // Initialize database
 let dbInitialized = false;
@@ -27,25 +20,38 @@ async function initializeDatabase() {
   }
 }
 
+// Create Express app
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
 // Routes
 const authRoutes = require('../routes/auth');
 const requestRoutes = require('../routes/requests');
 const userRoutes = require('../routes/users');
 
-app.use('/api/auth', authRoutes);
-app.use('/api/requests', requestRoutes);
-app.use('/api/users', userRoutes);
+// Mount routes with /api prefix since Vercel routes /api/* to this file
+app.use('/auth', authRoutes);
+app.use('/requests', requestRoutes);
+app.use('/users', userRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Handle all API requests
-app.all('/api/*', async (req, res, next) => {
-  await initializeDatabase();
-  next();
+// Root route
+app.get('/', (req, res) => {
+  res.json({ message: 'Волонтерський портал API', status: 'OK' });
 });
 
 // Export for Vercel
-module.exports = app;
+module.exports = async (req, res) => {
+  // Initialize database on first request
+  await initializeDatabase();
+  
+  // Handle the request
+  return app(req, res);
+};
