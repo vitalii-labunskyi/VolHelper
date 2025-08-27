@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { Pool } = require('pg');
 
 const app = express();
 
@@ -12,11 +13,53 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Simple in-memory storage for demo
-let users = [];
-let requests = [];
-let userIdCounter = 1;
-let requestIdCounter = 1;
+// PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// Initialize database tables
+async function initDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        phone VARCHAR(255) NOT NULL,
+        role VARCHAR(50) DEFAULT 'volunteer',
+        skills JSONB DEFAULT '[]',
+        location JSONB DEFAULT '{}',
+        availability VARCHAR(50) DEFAULT 'flexible',
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS requests (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(500) NOT NULL,
+        description TEXT NOT NULL,
+        category VARCHAR(100) NOT NULL,
+        priority VARCHAR(50) DEFAULT 'medium',
+        location JSONB NOT NULL,
+        contact_info JSONB NOT NULL,
+        status VARCHAR(50) DEFAULT 'new',
+        assigned_volunteer_id INTEGER REFERENCES users(id),
+        deadline TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    console.log('📊 База даних ініціалізована');
+  } catch (error) {
+    console.error('❌ Помилка ініціалізації бази даних:', error);
+  }
+}
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'volhelper_demo_secret_key_2024';
@@ -24,14 +67,26 @@ const JWT_SECRET = process.env.JWT_SECRET || 'volhelper_demo_secret_key_2024';
 // API Routes
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    users: users.length,
-    requests: requests.length,
-    environment: process.env.NODE_ENV || 'development'
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const usersResult = await pool.query('SELECT COUNT(*) FROM users');
+    const requestsResult = await pool.query('SELECT COUNT(*) FROM requests');
+    
+    res.json({ 
+      status: 'OK', 
+      timestamp: new Date().toISOString(),
+      users: parseInt(usersResult.rows[0].count),
+      requests: parseInt(requestsResult.rows[0].count),
+      environment: process.env.NODE_ENV || 'development',
+      database: 'PostgreSQL connected'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'ERROR',
+      error: 'Database connection failed',
+      details: error.message
+    });
+  }
 });
 
 // Auth routes
@@ -44,7 +99,8 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     // Check if user exists
-    if (users.find(u => u.email === email)) {
+    const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
       return res.status(400).json({ error: 'Користувач з таким email вже існує' });
     }
 
@@ -53,21 +109,23 @@ app.post('/api/auth/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     // Create user
-    const user = {
-      id: userIdCounter++,
+    const result = await pool.query(`
+      INSERT INTO users (name, email, password, phone, role, skills, location, availability, is_active)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id, name, email, role, skills, location, availability, created_at
+    `, [
       name,
-      email,
-      password: hashedPassword,
+      email, 
+      hashedPassword,
       phone,
-      role: 'volunteer',
-      skills: skills || [],
-      location: location || {},
-      availability: availability || 'flexible',
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
+      'volunteer',
+      JSON.stringify(skills || []),
+      JSON.stringify(location || {}),
+      availability || 'flexible',
+      true
+    ]);
 
-    users.push(user);
+    const user = result.rows[0];
 
     // Generate JWT token
     const token = jwt.sign(
@@ -104,10 +162,16 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Email та пароль обов\'язкові' });
     }
 
-    const user = users.find(u => u.email === email && u.isActive);
-    if (!user) {
+    const result = await pool.query(
+      'SELECT id, name, email, password, role, skills, location, availability FROM users WHERE email = $1 AND is_active = true',
+      [email]
+    );
+    
+    if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Невірні дані для входу' });
     }
+
+    const user = result.rows[0];
 
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
@@ -143,7 +207,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // Requests routes
-app.post('/api/requests', (req, res) => {
+app.post('/api/requests', async (req, res) => {
   try {
     const { title, description, category, priority, location, contactInfo, deadline } = req.body;
 
@@ -151,26 +215,39 @@ app.post('/api/requests', (req, res) => {
       return res.status(400).json({ error: 'Всі обов\'язкові поля мають бути заповнені' });
     }
 
-    const request = {
-      id: requestIdCounter++,
+    const result = await pool.query(`
+      INSERT INTO requests (title, description, category, priority, location, contact_info, status, deadline)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *
+    `, [
       title,
       description,
       category,
-      priority: priority || 'medium',
-      location,
-      contactInfo,
-      status: 'new',
-      assignedVolunteerId: null,
-      deadline: deadline ? new Date(deadline).toISOString() : null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      priority || 'medium',
+      JSON.stringify(location),
+      JSON.stringify(contactInfo),
+      'new',
+      deadline ? new Date(deadline).toISOString() : null
+    ]);
 
-    requests.push(request);
+    const request = result.rows[0];
 
     res.status(201).json({
       message: 'Заявка успішно створена',
-      request
+      request: {
+        id: request.id,
+        title: request.title,
+        description: request.description,
+        category: request.category,
+        priority: request.priority,
+        location: request.location,
+        contactInfo: request.contact_info,
+        status: request.status,
+        assignedVolunteerId: request.assigned_volunteer_id,
+        deadline: request.deadline,
+        createdAt: request.created_at,
+        updatedAt: request.updated_at
+      }
     });
 
   } catch (error) {
@@ -179,12 +256,38 @@ app.post('/api/requests', (req, res) => {
   }
 });
 
-app.get('/api/requests', (req, res) => {
+app.get('/api/requests', async (req, res) => {
   try {
-    // Return requests with basic formatting for frontend compatibility
-    const formattedRequests = requests.map(req => ({
-      ...req,
-      assignedVolunteer: req.assignedVolunteerId ? users.find(u => u.id === req.assignedVolunteerId) : null,
+    const result = await pool.query(`
+      SELECT 
+        r.*,
+        u.name as volunteer_name,
+        u.email as volunteer_email,
+        u.phone as volunteer_phone
+      FROM requests r
+      LEFT JOIN users u ON r.assigned_volunteer_id = u.id
+      ORDER BY r.created_at DESC
+    `);
+
+    const formattedRequests = result.rows.map(req => ({
+      id: req.id,
+      title: req.title,
+      description: req.description,
+      category: req.category,
+      priority: req.priority,
+      location: req.location,
+      contactInfo: req.contact_info,
+      status: req.status,
+      assignedVolunteerId: req.assigned_volunteer_id,
+      assignedVolunteer: req.assigned_volunteer_id ? {
+        id: req.assigned_volunteer_id,
+        name: req.volunteer_name,
+        email: req.volunteer_email,
+        phone: req.volunteer_phone
+      } : null,
+      deadline: req.deadline,
+      createdAt: req.created_at,
+      updatedAt: req.updated_at,
       Notes: [] // Empty for demo
     }));
 
@@ -232,7 +335,14 @@ app.use('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Сервер запущено на порті ${PORT}`);
-  console.log(`📱 Портал доступний на http://localhost:${PORT}`);
+
+// Initialize database and start server
+initDatabase().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Сервер запущено на порті ${PORT}`);
+    console.log(`📱 Портал доступний на http://localhost:${PORT}`);
+  });
+}).catch(error => {
+  console.error('❌ Неможливо запустити сервер:', error);
+  process.exit(1);
 });

@@ -9,3 +9,12 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: volunteer-portal-db
+          property: connectionString
+
+databases:
+  - name: volunteer-portal-db
+    databaseName: volhelper
+    user: volhelper_user
