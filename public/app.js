@@ -6,6 +6,36 @@ if (authToken) {
     checkAuth();
 }
 
+// Navigation event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    // Handle navigation clicks
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const href = link.getAttribute('href');
+            if (href && href.startsWith('#')) {
+                const sectionId = href.substring(1);
+                showSection(sectionId);
+            }
+        });
+    });
+    
+    // Handle buttons that trigger navigation
+    document.querySelectorAll('button[onclick*="showSection"]').forEach(button => {
+        const onclickAttr = button.getAttribute('onclick');
+        if (onclickAttr) {
+            const match = onclickAttr.match(/showSection\(['"]([^'"]+)['"]\)/);
+            if (match) {
+                const sectionId = match[1];
+                button.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    showSection(sectionId);
+                });
+            }
+        }
+    });
+});
+
 function showSection(sectionId) {
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.getElementById(sectionId).classList.add('active');

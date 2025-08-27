@@ -206,6 +206,46 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Get user profile
+app.get('/api/auth/profile', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Токен авторизації відсутній' });
+    }
+    
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    const result = await pool.query(
+      'SELECT id, name, email, role, skills, location, availability FROM users WHERE id = $1 AND is_active = true',
+      [decoded.userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Користувача не знайдено' });
+    }
+
+    const user = result.rows[0];
+    res.json({ 
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        skills: user.skills,
+        location: user.location,
+        availability: user.availability
+      }
+    });
+
+  } catch (error) {
+    console.error('Profile error:', error);
+    res.status(500).json({ error: 'Серверна помилка' });
+  }
+});
+
 // Requests routes
 app.post('/api/requests', async (req, res) => {
   try {
@@ -258,7 +298,8 @@ app.post('/api/requests', async (req, res) => {
 
 app.get('/api/requests', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const { status } = req.query;
+    let query = `
       SELECT 
         r.*,
         u.name as volunteer_name,
@@ -266,8 +307,17 @@ app.get('/api/requests', async (req, res) => {
         u.phone as volunteer_phone
       FROM requests r
       LEFT JOIN users u ON r.assigned_volunteer_id = u.id
-      ORDER BY r.created_at DESC
-    `);
+    `;
+    let params = [];
+    
+    if (status) {
+      query += ` WHERE r.status = $1`;
+      params.push(status);
+    }
+    
+    query += ` ORDER BY r.created_at DESC`;
+
+    const result = await pool.query(query, params);
 
     const formattedRequests = result.rows.map(req => ({
       id: req.id,
@@ -294,6 +344,108 @@ app.get('/api/requests', async (req, res) => {
     res.json(formattedRequests);
   } catch (error) {
     console.error('Get requests error:', error);
+    res.status(500).json({ error: 'Серверна помилка' });
+  }
+});
+
+// Get single request
+app.get('/api/requests/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT 
+        r.*,
+        u.name as volunteer_name,
+        u.email as volunteer_email,
+        u.phone as volunteer_phone
+      FROM requests r
+      LEFT JOIN users u ON r.assigned_volunteer_id = u.id
+      WHERE r.id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Заявку не знайдено' });
+    }
+
+    const req = result.rows[0];
+    const formattedRequest = {
+      id: req.id,
+      title: req.title,
+      description: req.description,
+      category: req.category,
+      priority: req.priority,
+      location: req.location,
+      contactInfo: req.contact_info,
+      status: req.status,
+      assignedVolunteerId: req.assigned_volunteer_id,
+      assignedVolunteer: req.assigned_volunteer_id ? {
+        id: req.assigned_volunteer_id,
+        name: req.volunteer_name,
+        email: req.volunteer_email,
+        phone: req.volunteer_phone
+      } : null,
+      deadline: req.deadline,
+      createdAt: req.created_at,
+      updatedAt: req.updated_at,
+      Notes: [] // Empty for demo
+    };
+
+    res.json(formattedRequest);
+  } catch (error) {
+    console.error('Get request error:', error);
+    res.status(500).json({ error: 'Серверна помилка' });
+  }
+});
+
+// Assign request to volunteer
+app.put('/api/requests/:id/assign', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Токен авторизації відсутній' });
+    }
+    
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    await pool.query(`
+      UPDATE requests 
+      SET assigned_volunteer_id = $1, status = 'assigned', updated_at = NOW()
+      WHERE id = $2
+    `, [decoded.userId, id]);
+
+    res.json({ message: 'Заявку призначено' });
+  } catch (error) {
+    console.error('Assign request error:', error);
+    res.status(500).json({ error: 'Серверна помилка' });
+  }
+});
+
+// Update request status
+app.put('/api/requests/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Токен авторизації відсутній' });
+    }
+    
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    await pool.query(`
+      UPDATE requests 
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+    `, [status, id]);
+
+    res.json({ message: 'Статус оновлено' });
+  } catch (error) {
+    console.error('Update status error:', error);
     res.status(500).json({ error: 'Серверна помилка' });
   }
 });
