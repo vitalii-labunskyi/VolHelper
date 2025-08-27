@@ -125,4 +125,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-module.exports = app;
+// Export for Vercel serverless
+module.exports = (req, res) => {
+  return app(req, res);
+};
