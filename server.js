@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 
@@ -15,6 +17,9 @@ let users = [];
 let requests = [];
 let userIdCounter = 1;
 let requestIdCounter = 1;
+
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET || 'volhelper_demo_secret_key_2024';
 
 // API Routes
 
@@ -43,11 +48,16 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Користувач з таким email вже існує' });
     }
 
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
     // Create user
     const user = {
       id: userIdCounter++,
       name,
       email,
+      password: hashedPassword,
       phone,
       role: 'volunteer',
       skills: skills || [],
@@ -59,9 +69,16 @@ app.post('/api/auth/register', async (req, res) => {
 
     users.push(user);
 
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
     res.status(201).json({
       message: 'Волонтер успішно зареєстрований',
-      token: 'demo_token_' + user.id,
+      token,
       user: {
         id: user.id,
         name: user.name,
@@ -92,9 +109,22 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Невірні дані для входу' });
     }
 
+    // Check password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Невірні дані для входу' });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
     res.json({
       message: 'Успішний вхід',
-      token: 'demo_token_' + user.id,
+      token,
       user: {
         id: user.id,
         name: user.name,
