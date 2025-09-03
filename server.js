@@ -5,6 +5,10 @@ const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+
+const ca = fs.readFileSync(process.env.PG_CA_PATH, 'utf8');
+console.log('PG_CA_PATH:', process.env.PG_CA_PATH, 'size:', ca.length);
+
 const { Pool } = require('pg');
 
 const app = express();
@@ -22,7 +26,7 @@ const ca = require('fs').readFileSync(caPath, 'utf8');
 // PostgreSQL (Supabase pooler + SSL з CA)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { ca, rejectUnauthorized: true }
+  ssl: { ca, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
 });
 
 
