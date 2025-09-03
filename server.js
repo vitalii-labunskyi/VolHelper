@@ -1,4 +1,5 @@
 require('dotenv').config();
+const fs = require('fs');  
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -13,10 +14,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// PostgreSQL connection
+
+// PostgreSQL (Supabase pooler + SSL з CA)
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  connectionString: process.env.DATABASE_URL, // формат: postgresql://postgres:PASS@<ref>.pooler.supabase.com:6543/postgres?sslmode=require
+  ssl: {
+    ca: fs.readFileSync(process.env.PG_CA_PATH, 'utf8') // /etc/secrets/isrgrootx1.pem
+  }
 });
 
 // Initialize database tables
@@ -66,14 +70,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'volhelper_demo_secret_key_2024';
 
 // API Routes
 
-// Health check
+// Healthchecks
+app.get('/healthz', (req, res) => res.status(200).send('ok')); // ← для Render
 app.get('/api/health', async (req, res) => {
   try {
     const usersResult = await pool.query('SELECT COUNT(*) FROM users');
     const requestsResult = await pool.query('SELECT COUNT(*) FROM requests');
-    
-    res.json({ 
-      status: 'OK', 
+    res.json({
+      status: 'OK',
       timestamp: new Date().toISOString(),
       users: parseInt(usersResult.rows[0].count),
       requests: parseInt(requestsResult.rows[0].count),
@@ -81,11 +85,7 @@ app.get('/api/health', async (req, res) => {
       database: 'PostgreSQL connected'
     });
   } catch (error) {
-    res.status(500).json({ 
-      status: 'ERROR',
-      error: 'Database connection failed',
-      details: error.message
-    });
+    res.status(500).json({ status: 'ERROR', error: 'Database connection failed', details: error.message });
   }
 });
 
