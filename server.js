@@ -15,13 +15,16 @@ app.use(express.json());
 app.use(express.static('public'));
 
 
+const caPath = process.env.PG_CA_PATH;
+console.log('PG_CA_PATH:', caPath, 'size:', require('fs').statSync(caPath).size);
+const ca = require('fs').readFileSync(caPath, 'utf8');
+
 // PostgreSQL (Supabase pooler + SSL з CA)
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // формат: postgresql://postgres:PASS@<ref>.pooler.supabase.com:6543/postgres?sslmode=require
-  ssl: {
-    ca: fs.readFileSync(process.env.PG_CA_PATH, 'utf8') // /etc/secrets/isrgrootx1.pem
-  }
+  connectionString: process.env.DATABASE_URL,
+  ssl: { ca, rejectUnauthorized: true }
 });
+
 
 // Initialize database tables
 async function initDatabase() {
