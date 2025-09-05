@@ -1,32 +1,45 @@
 require('dotenv').config();
-const fs = require('fs');  
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
-const ca = fs.readFileSync(process.env.PG_CA_PATH, 'utf8');
-console.log('PG_CA_PATH:', process.env.PG_CA_PATH, 'size:', ca.length);
-
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 
 const app = express();
 
-// Middleware
-app.use(cors());
+// Security + core middleware
+app.use(helmet());
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json());
 app.use(express.static('public'));
 
+// Basic rate limiting for API
+const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
+app.use('/api/', apiLimiter);
 
-const caPath = process.env.PG_CA_PATH;
-console.log('PG_CA_PATH:', caPath, 'size:', require('fs').statSync(caPath).size);
-const ca = require('fs').readFileSync(caPath, 'utf8');
+// PostgreSQL connection (Render/Supabase compatible)
+function buildSslConfig() {
+  const sslEnv = (process.env.PGSSL || process.env.PG_SSL || '').toLowerCase();
+  const caPath = process.env.PG_CA_PATH;
+  if (sslEnv === 'false' || sslEnv === 'disable') return false;
+  if (caPath && fs.existsSync(caPath)) {
+    try {
+      const ca = fs.readFileSync(caPath, 'utf8');
+      return { ca, rejectUnauthorized: true, minVersion: 'TLSv1.2' };
+    } catch (e) {
+      return { rejectUnauthorized: false };
+    }
+  }
+  return { rejectUnauthorized: false };
+}
 
-// PostgreSQL (Supabase pooler + SSL з CA)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { ca, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
+  ssl: process.env.DATABASE_URL?.includes('localhost') ? false : buildSslConfig()
 });
 
 
@@ -66,6 +79,16 @@ async function initDatabase() {
       )
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id SERIAL PRIMARY KEY,
+        text TEXT NOT NULL,
+        request_id INTEGER REFERENCES requests(id) ON DELETE CASCADE,
+        author_id INTEGER REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
     console.log('📊 База даних ініціалізована');
   } catch (error) {
     console.error('❌ Помилка ініціалізації бази даних:', error);
@@ -74,6 +97,22 @@ async function initDatabase() {
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'volhelper_demo_secret_key_2024';
+
+// Auth middleware
+function authRequired(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Токен авторизації відсутній' });
+    }
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.userId, email: decoded.email };
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Недійсний токен' });
+  }
+}
 
 // API Routes
 
@@ -214,20 +253,11 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // Get user profile
-app.get('/api/auth/profile', async (req, res) => {
+app.get('/api/auth/profile', authRequired, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Токен авторизації відсутній' });
-    }
-    
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
     const result = await pool.query(
       'SELECT id, name, email, role, skills, location, availability FROM users WHERE id = $1 AND is_active = true',
-      [decoded.userId]
+      [req.user.id]
     );
     
     if (result.rows.length === 0) {
@@ -303,7 +333,7 @@ app.post('/api/requests', async (req, res) => {
   }
 });
 
-app.get('/api/requests', async (req, res) => {
+app.get('/api/requests', authRequired, async (req, res) => {
   try {
     const { status } = req.query;
     let query = `
@@ -356,7 +386,7 @@ app.get('/api/requests', async (req, res) => {
 });
 
 // Get single request
-app.get('/api/requests/:id', async (req, res) => {
+app.get('/api/requests/:id', authRequired, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(`
@@ -375,6 +405,15 @@ app.get('/api/requests/:id', async (req, res) => {
     }
 
     const req = result.rows[0];
+
+    // Load notes for request
+    const notesRes = await pool.query(
+      `SELECT n.id, n.text, n.created_at, u.id as author_id, u.name as author_name
+       FROM notes n LEFT JOIN users u ON n.author_id = u.id
+       WHERE n.request_id = $1 ORDER BY n.created_at ASC`,
+      [id]
+    );
+
     const formattedRequest = {
       id: req.id,
       title: req.title,
@@ -394,7 +433,12 @@ app.get('/api/requests/:id', async (req, res) => {
       deadline: req.deadline,
       createdAt: req.created_at,
       updatedAt: req.updated_at,
-      Notes: [] // Empty for demo
+      Notes: notesRes.rows.map(n => ({
+        id: n.id,
+        text: n.text,
+        createdAt: n.created_at,
+        author: { id: n.author_id, name: n.author_name }
+      }))
     };
 
     res.json(formattedRequest);
@@ -405,23 +449,14 @@ app.get('/api/requests/:id', async (req, res) => {
 });
 
 // Assign request to volunteer
-app.put('/api/requests/:id/assign', async (req, res) => {
+app.put('/api/requests/:id/assign', authRequired, async (req, res) => {
   try {
     const { id } = req.params;
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Токен авторизації відсутній' });
-    }
-    
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
     await pool.query(`
       UPDATE requests 
       SET assigned_volunteer_id = $1, status = 'assigned', updated_at = NOW()
       WHERE id = $2
-    `, [decoded.userId, id]);
+    `, [req.user.id, id]);
 
     res.json({ message: 'Заявку призначено' });
   } catch (error) {
@@ -431,18 +466,19 @@ app.put('/api/requests/:id/assign', async (req, res) => {
 });
 
 // Update request status
-app.put('/api/requests/:id/status', async (req, res) => {
+app.put('/api/requests/:id/status', authRequired, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Токен авторизації відсутній' });
+    // Authorization: only assigned volunteer or admin
+    const reqRes = await pool.query('SELECT assigned_volunteer_id FROM requests WHERE id = $1', [id]);
+    if (reqRes.rows.length === 0) return res.status(404).json({ error: 'Заявку не знайдено' });
+    const assignedId = reqRes.rows[0].assigned_volunteer_id;
+    const userRes = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.id]);
+    const role = userRes.rows[0]?.role || 'volunteer';
+    if (role !== 'admin' && assignedId && assignedId !== req.user.id) {
+      return res.status(403).json({ error: 'Тільки призначений волонтер або адмін може змінювати статус' });
     }
-    
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
 
     await pool.query(`
       UPDATE requests 
@@ -453,6 +489,24 @@ app.put('/api/requests/:id/status', async (req, res) => {
     res.json({ message: 'Статус оновлено' });
   } catch (error) {
     console.error('Update status error:', error);
+    res.status(500).json({ error: 'Серверна помилка' });
+  }
+});
+
+// Add note to request
+app.post('/api/requests/:id/notes', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body || {};
+    if (!text || !text.trim()) return res.status(400).json({ error: 'Текст нотатки обов\'язковий' });
+
+    const exists = await pool.query('SELECT id FROM requests WHERE id = $1', [id]);
+    if (exists.rows.length === 0) return res.status(404).json({ error: 'Заявку не знайдено' });
+
+    await pool.query('INSERT INTO notes (text, request_id, author_id) VALUES ($1, $2, $3)', [text.trim(), id, req.user.id]);
+    res.status(201).json({ message: 'Нотатку додано' });
+  } catch (error) {
+    console.error('Add note error:', error);
     res.status(500).json({ error: 'Серверна помилка' });
   }
 });
@@ -473,7 +527,11 @@ app.get('/api', (req, res) => {
       'POST /api/auth/register',
       'POST /api/auth/login',
       'POST /api/requests',
-      'GET /api/requests'
+      'GET /api/requests (auth)',
+      'GET /api/requests/:id (auth)',
+      'PUT /api/requests/:id/assign (auth)',
+      'PUT /api/requests/:id/status (auth)',
+      'POST /api/requests/:id/notes (auth)'
     ]
   });
 });
