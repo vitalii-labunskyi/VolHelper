@@ -6,6 +6,47 @@ if (authToken) {
     checkAuth();
 }
 
+// Prevent double submits and show loading state on buttons
+function withSubmitLock(btn, fn) {
+    return async () => {
+        if (btn && btn.dataset.loading === '1') return;
+        const original = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.dataset.loading = '1';
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Обробка...';
+        }
+        try { await fn(); } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.dataset.loading = '0';
+                btn.innerHTML = original;
+            }
+        }
+    };
+}
+
+// Short info modal for confirmations
+function showInfoModal(title, message, autoCloseMs = 3000) {
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.innerHTML = `
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">${title}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body"><p class="mb-0">${message}</p></div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const bsModal = new bootstrap.Modal(modal, { backdrop: 'static', keyboard: true });
+    bsModal.show();
+    if (autoCloseMs) setTimeout(() => bsModal.hide(), autoCloseMs);
+    modal.addEventListener('hidden.bs.modal', () => document.body.removeChild(modal));
+}
+
 // Navigation event listeners
 document.addEventListener('DOMContentLoaded', () => {
     // Handle navigation clicks
@@ -119,110 +160,99 @@ function logout() {
     showToast('Ви вийшли з системи', 'info');
 }
 
-document.getElementById('helpRequestForm').addEventListener('submit', async (e) => {
+document.getElementById('helpRequestForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
-    
-    const requestData = {
-        title: formData.get('title'),
-        description: formData.get('description'),
-        category: formData.get('category'),
-        priority: formData.get('priority'),
-        location: {
-            address: formData.get('address'),
-            city: formData.get('city'),
-            region: formData.get('region')
-        },
-        contactInfo: {
-            name: formData.get('contactName'),
-            phone: formData.get('contactPhone'),
-            email: formData.get('contactEmail'),
-            alternateContact: formData.get('alternateContact')
-        },
-        deadline: formData.get('deadline') || null
-    };
-    
-    try {
-        await apiRequest('/requests', {
-            method: 'POST',
-            body: JSON.stringify(requestData)
-        });
-        
-        showToast('Заявка успішно подана!', 'success');
-        e.target.reset();
-        showSection('home');
-    } catch (error) {
-        showToast(error.message, 'danger');
-    }
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    withSubmitLock(submitBtn, async () => {
+        const formData = new FormData(e.target);
+        const requestData = {
+            title: formData.get('title'),
+            description: formData.get('description'),
+            category: formData.get('category'),
+            priority: formData.get('priority'),
+            location: {
+                address: formData.get('address'),
+                city: formData.get('city'),
+                region: formData.get('region')
+            },
+            contactInfo: {
+                name: formData.get('contactName'),
+                phone: formData.get('contactPhone'),
+                email: formData.get('contactEmail'),
+                alternateContact: formData.get('alternateContact')
+            },
+            deadline: formData.get('deadline') || null
+        };
+        try {
+            await apiRequest('/requests', { method: 'POST', body: JSON.stringify(requestData) });
+            e.target.reset();
+            showInfoModal('Дякуємо!', 'Ваша заявка подана до розгляду. Очікуйте на зв\'язок.', 3000);
+            showSection('home');
+        } catch (error) {
+            showToast(error.message, 'danger');
+        }
+    })();
 });
 
-document.getElementById('volunteerRegisterForm').addEventListener('submit', async (e) => {
+document.getElementById('volunteerRegisterForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
-    
-    const userData = {
-        name: formData.get('name'),
-        email: formData.get('email'),
-        password: formData.get('password'),
-        phone: formData.get('phone'),
-        skills: formData.get('skills') ? formData.get('skills').split(',').map(s => s.trim()) : [],
-        location: {
-            city: formData.get('city'),
-            region: formData.get('region')
-        },
-        availability: formData.get('availability')
-    };
-    
-    try {
-        const response = await apiRequest('/auth/register', {
-            method: 'POST',
-            body: JSON.stringify(userData)
-        });
-        
-        authToken = response.token;
-        currentUser = response.user;
-        localStorage.setItem('authToken', authToken);
-        updateNavigation(true);
-        
-        showToast('Реєстрація успішна!', 'success');
-        showSection('dashboard');
-    } catch (error) {
-        showToast(error.message, 'danger');
-    }
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    withSubmitLock(submitBtn, async () => {
+        const formData = new FormData(e.target);
+        const userData = {
+            name: formData.get('name'),
+            email: formData.get('email'),
+            password: formData.get('password'),
+            phone: formData.get('phone'),
+            skills: formData.get('skills') ? formData.get('skills').split(',').map(s => s.trim()) : [],
+            location: { city: formData.get('city'), region: formData.get('region') },
+            availability: formData.get('availability')
+        };
+        try {
+            const response = await apiRequest('/auth/register', { method: 'POST', body: JSON.stringify(userData) });
+            authToken = response.token;
+            currentUser = response.user;
+            localStorage.setItem('authToken', authToken);
+            updateNavigation(true);
+            showToast('Реєстрація успішна!', 'success');
+            showSection('dashboard');
+        } catch (error) {
+            showToast(error.message, 'danger');
+        }
+    })();
 });
 
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
+document.getElementById('loginForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
-    
-    const loginData = {
-        email: formData.get('email'),
-        password: formData.get('password')
-    };
-    
-    try {
-        const response = await apiRequest('/auth/login', {
-            method: 'POST',
-            body: JSON.stringify(loginData)
-        });
-        
-        authToken = response.token;
-        currentUser = response.user;
-        localStorage.setItem('authToken', authToken);
-        updateNavigation(true);
-        
-        showToast('Успішний вхід!', 'success');
-        showSection('dashboard');
-    } catch (error) {
-        showToast(error.message, 'danger');
-    }
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    withSubmitLock(submitBtn, async () => {
+        const formData = new FormData(e.target);
+        const loginData = { email: formData.get('email'), password: formData.get('password') };
+        try {
+            const response = await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify(loginData) });
+            authToken = response.token;
+            currentUser = response.user;
+            localStorage.setItem('authToken', authToken);
+            updateNavigation(true);
+            showToast('Успішний вхід!', 'success');
+            showSection('dashboard');
+        } catch (error) {
+            showToast(error.message, 'danger');
+        }
+    })();
 });
 
 function loadDashboard() {
     if (!currentUser) return;
     
     if (currentUser.role === 'admin') {
-        document.getElementById('adminTab').classList.remove('d-none');
+        const adminNavItem = document.getElementById('adminNavItem');
+        if (adminNavItem) adminNavItem.classList.remove('d-none');
+    }
+    const dashLogout = document.getElementById('dashboardLogoutBtn');
+    if (dashLogout) {
+        dashLogout.classList.remove('d-none');
+        dashLogout.onclick = () => logout();
     }
     
     loadRequests();
