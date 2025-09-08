@@ -98,6 +98,40 @@ function showToast(message, type = 'info') {
     bsToast.show();
 }
 
+// Confirmation modal that returns a Promise<boolean>
+function showConfirmModal(title, message, confirmText = 'Підтвердити', cancelText = 'Скасувати') {
+    return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.className = 'modal fade';
+        modal.innerHTML = `
+          <div class="modal-dialog">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">${title}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body"><p class="mb-0">${message}</p></div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">${cancelText}</button>
+                <button type="button" class="btn btn-primary" id="confirmBtn">${confirmText}</button>
+              </div>
+            </div>
+          </div>`;
+        document.body.appendChild(modal);
+        const bsModal = new bootstrap.Modal(modal, { backdrop: 'static' });
+        const cleanup = () => { document.body.removeChild(modal); };
+        modal.addEventListener('hidden.bs.modal', cleanup);
+        modal.querySelector('#confirmBtn').addEventListener('click', () => {
+            resolve(true);
+            bsModal.hide();
+        });
+        modal.addEventListener('click', (e) => {
+            if (e.target.matches('.btn-secondary')) { resolve(false); }
+        });
+        bsModal.show();
+    });
+}
+
 async function apiRequest(endpoint, options = {}) {
     const config = {
         headers: {
@@ -290,10 +324,10 @@ function displayRequests(requests) {
         const canCancel = (currentUser.role === 'admin' || isAssignedToMe) && request.status !== 'completed';
 
         return `
-        <div class="card request-card priority-${request.priority} mb-3">
+        <div class="card request-card priority-${request.priority} ${isAssignedToMe ? 'my-request' : ''} mb-3">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-start mb-2">
-                    <h5 class="card-title mb-0">${request.title}</h5>
+                    <h5 class="card-title mb-0">${request.title}${isAssignedToMe ? ' <span class="badge badge-my">моє</span>' : ''}</h5>
                     <span class="badge status-badge status-${request.status}">${getStatusText(request.status)}</span>
                 </div>
                 <p class="text-muted mb-2">
@@ -335,11 +369,17 @@ document.getElementById('requestsList').addEventListener('click', (e) => {
         const wrapped = withSubmitLock(btn, () => startWork(id));
         wrapped();
     } else if (action === 'complete') {
-        const wrapped = withSubmitLock(btn, () => setStatus(id, 'completed', 'Заявку завершено'));
-        wrapped();
+        showConfirmModal('Підтвердження', 'Підтвердити завершення заявки?', 'Завершити').then((ok) => {
+            if (!ok) return;
+            const wrapped = withSubmitLock(btn, () => setStatus(id, 'completed', 'Заявку завершено'));
+            wrapped();
+        });
     } else if (action === 'cancel') {
-        const wrapped = withSubmitLock(btn, () => setStatus(id, 'cancelled', 'Заявку скасовано'));
-        wrapped();
+        showConfirmModal('Підтвердження', 'Справді скасувати заявку?', 'Скасувати').then((ok) => {
+            if (!ok) return;
+            const wrapped = withSubmitLock(btn, () => setStatus(id, 'cancelled', 'Заявку скасовано'));
+            wrapped();
+        });
     }
 });
 

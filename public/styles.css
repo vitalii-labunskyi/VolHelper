@@ -121,3 +121,12 @@
         font-size: 1rem;
     }
 }
+.request-card.my-request {
+    border-left-color: #20c997; /* teal highlight for own requests */
+}
+
+.badge-my {
+    background-color: #20c997;
+    color: #fff;
+    margin-left: 8px;
+}

@@ -469,6 +469,10 @@ app.put('/api/requests/:id/assign', authRequired, async (req, res) => {
       SET assigned_volunteer_id = $1, status = 'assigned', updated_at = NOW()
       WHERE id = $2
     `, [req.user.id, id]);
+    // Add note about assignment
+    await pool.query('INSERT INTO notes (text, request_id, author_id) VALUES ($1, $2, $3)', [
+      'Заявку призначено волонтеру', id, req.user.id
+    ]);
 
     res.json({ message: 'Заявку призначено' });
   } catch (error) {
@@ -497,6 +501,10 @@ app.put('/api/requests/:id/status', authRequired, async (req, res) => {
       SET status = $1, updated_at = NOW()
       WHERE id = $2
     `, [status, id]);
+    // Add note about status change
+    await pool.query('INSERT INTO notes (text, request_id, author_id) VALUES ($1, $2, $3)', [
+      `Статус заявки оновлено на "${status}"`, id, req.user.id
+    ]);
 
     res.json({ message: 'Статус оновлено' });
   } catch (error) {
