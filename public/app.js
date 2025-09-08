@@ -289,13 +289,44 @@ function displayRequests(requests) {
     }).join('');
 }
 
+// Reliable handling for dynamic request buttons
+document.getElementById('requestsList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    if (action === 'assign') {
+        const wrapped = withSubmitLock(btn, () => assignToSelf(id));
+        wrapped();
+    } else if (action === 'details') {
+        const wrapped = withSubmitLock(btn, () => viewRequest(id));
+        wrapped();
+    } else if (action === 'start') {
+        const wrapped = withSubmitLock(btn, () => startWork(id));
+        wrapped();
+    }
+});
+
+async function startWork(requestId) {
+    try {
+        await apiRequest(`/requests/${requestId}/status`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: 'in_progress' })
+        });
+        showInfoModal('Готово', 'Заявку взято в роботу');
+        loadRequests();
+    } catch (error) {
+        showToast(error.message, 'danger');
+    }
+}
+
 async function assignToSelf(requestId) {
     try {
         await apiRequest(`/requests/${requestId}/assign`, {
             method: 'PUT',
             body: JSON.stringify({})
         });
-        showToast('Заявку призначено вам!', 'success');
+        showInfoModal('Готово', 'Заявку призначено вам!');
         loadRequests();
     } catch (error) {
         showToast(error.message, 'danger');
@@ -429,9 +460,9 @@ async function updateRequestStatus(requestId) {
             method: 'PUT',
             body: JSON.stringify({ status: newStatus })
         });
-        
-        showToast('Статус оновлено!', 'success');
-        bootstrap.Modal.getInstance(document.querySelector('.modal.show')).hide();
+        showInfoModal('Готово', 'Статус оновлено');
+        const openModal = document.querySelector('.modal.show');
+        if (openModal) bootstrap.Modal.getInstance(openModal).hide();
         loadRequests();
     } catch (error) {
         showToast(error.message, 'danger');
@@ -485,17 +516,13 @@ function loadProfile() {
 }
 
 document.getElementById('dashboardMenu').addEventListener('click', (e) => {
-    if (e.target.dataset.tab) {
-        e.preventDefault();
-        
-        document.querySelectorAll('#dashboardMenu .list-group-item').forEach(item => 
-            item.classList.remove('active'));
-        e.target.classList.add('active');
-        
-        document.querySelectorAll('.dashboard-tab').forEach(tab => 
-            tab.classList.remove('active'));
-        document.getElementById(e.target.dataset.tab + 'Tab').classList.add('active');
-    }
+    const item = e.target.closest('#dashboardMenu [data-tab]');
+    if (!item) return;
+    e.preventDefault();
+    document.querySelectorAll('#dashboardMenu .list-group-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    document.querySelectorAll('.dashboard-tab').forEach(tab => tab.classList.remove('active'));
+    document.getElementById(item.dataset.tab + 'Tab').classList.add('active');
 });
 
 function getStatusText(status) {
