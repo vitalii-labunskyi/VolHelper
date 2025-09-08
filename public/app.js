@@ -280,33 +280,13 @@ function displayRequests(requests) {
         return;
     }
     
-    requestsList.innerHTML = requests.map(request => `
-        <div class="card request-card priority-${request.priority} mb-3">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-start mb-2">
-                    <h5 class="card-title mb-0">${request.title}</h5>
-                    <span class="badge status-badge status-${request.status}">${getStatusText(request.status)}</span>
-                </div>
-                <p class="text-muted mb-2">
-                    <i class="fas fa-map-marker-alt me-1"></i>${request.location.city}
-                    <span class="ms-3"><i class="fas fa-tag me-1"></i>${getCategoryText(request.category)}</span>
-                    <span class="ms-3"><i class="fas fa-exclamation-triangle me-1"></i>${getPriorityText(request.priority)}</span>
-                </p>
-                <p class="card-text">${request.description.substring(0, 150)}${request.description.length > 150 ? '...' : ''}</p>
-                <div class="d-flex justify-content-between align-items-center">
-                    <small class="text-muted">
-                        <i class="fas fa-clock me-1"></i>${new Date(request.createdAt).toLocaleDateString('uk')}
-                    </small>
-                    <div>
-                        ${request.status === 'new' && currentUser.role === 'volunteer' ? 
-                            `<button class="btn btn-sm btn-primary me-2" onclick="assignToSelf('${request.id}')">Взяти</button>` : ''
-                        }
-                        <button class="btn btn-sm btn-outline-primary" onclick="viewRequest('${request.id}')">Деталі</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `).join('');
+    requestsList.innerHTML = requests.map(request => {
+        const takeBtn = (request.status === 'new' && currentUser.role === 'volunteer')
+          ? `<button class=\"btn btn-sm btn-primary me-2\" data-action=\"assign\" data-id=\"${request.id}\">Взяти</button>`
+          : '';
+        return `
+        <div class=\"card request-card priority-${request.priority} mb-3\">\n            <div class=\"card-body\">\n                <div class=\"d-flex justify-content-between align-items-start mb-2\">\n                    <h5 class=\"card-title mb-0\">${request.title}</h5>\n                    <span class=\"badge status-badge status-${request.status}\">${getStatusText(request.status)}</span>\n                </div>\n                <p class=\"text-muted mb-2\">\n                    <i class=\"fas fa-map-marker-alt me-1\"></i>${request.location.city}\n                    <span class=\"ms-3\"><i class=\"fas fa-tag me-1\"></i>${getCategoryText(request.category)}</span>\n                    <span class=\"ms-3\"><i class=\"fas fa-exclamation-triangle me-1\"></i>${getPriorityText(request.priority)}</span>\n                </p>\n                <p class=\"card-text\">${request.description.substring(0, 150)}${request.description.length > 150 ? '...' : ''}</p>\n                <div class=\"d-flex justify-content-between align-items-center\">\n                    <small class=\"text-muted\">\n                        <i class=\"fas fa-clock me-1\"></i>${new Date(request.createdAt).toLocaleDateString('uk')}\n                    </small>\n                    <div>\n                        ${takeBtn}\n                        <button class=\"btn btn-sm btn-outline-primary\" data-action=\"details\" data-id=\"${request.id}\">Деталі</button>\n                    </div>\n                </div>\n            </div>\n        </div>`;
+    }).join('');
 }
 
 async function assignToSelf(requestId) {
