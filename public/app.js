@@ -75,6 +75,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
+
+    // Forgot password link
+    const forgotLink = document.getElementById('forgotLink');
+    if (forgotLink) {
+        forgotLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            showSection('forgot');
+        });
+    }
+
+    // Auto-open reset section if token in URL
+    const url = new URL(window.location.href);
+    const token = url.searchParams.get('token');
+    if (token) {
+        // Store token in memory for reset form
+        window.__resetToken = token;
+        showSection('reset');
+    }
 });
 
 function showSection(sectionId) {
@@ -193,6 +211,55 @@ function logout() {
     showSection('home');
     showToast('Ви вийшли з системи', 'info');
 }
+
+// Forgot password
+document.getElementById('forgotForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    withSubmitLock(btn, async () => {
+        const formData = new FormData(e.target);
+        try {
+            await apiRequest('/auth/forgot-password', {
+                method: 'POST',
+                body: JSON.stringify({ email: formData.get('email') })
+            });
+            showInfoModal('Готово', 'Якщо email існує, лист надіслано');
+            showSection('login');
+        } catch (error) {
+            showToast('Спробуйте пізніше', 'danger');
+        }
+    })();
+});
+
+// Reset password
+document.getElementById('resetForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    withSubmitLock(btn, async () => {
+        const formData = new FormData(e.target);
+        const password = formData.get('password');
+        const token = window.__resetToken;
+        if (!token) {
+            showToast('Недійсне посилання', 'danger');
+            return;
+        }
+        try {
+            await apiRequest('/auth/reset-password', {
+                method: 'POST',
+                body: JSON.stringify({ token, password })
+            });
+            showInfoModal('Готово', 'Пароль змінено. Увійдіть з новим паролем.');
+            // Clean token from URL
+            const url = new URL(window.location.href);
+            url.searchParams.delete('token');
+            window.history.replaceState({}, '', url.toString());
+            window.__resetToken = null;
+            showSection('login');
+        } catch (error) {
+            showToast(error.message, 'danger');
+        }
+    })();
+});
 
 document.getElementById('helpRequestForm').addEventListener('submit', (e) => {
     e.preventDefault();

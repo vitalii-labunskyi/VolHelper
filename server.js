@@ -8,6 +8,8 @@ const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 const app = express();
 
@@ -89,6 +91,17 @@ async function initDatabase() {
       )
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(64) NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        used_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
     console.log('📊 База даних ініціалізована');
   } catch (error) {
     console.error('❌ Помилка ініціалізації бази даних:', error);
@@ -134,6 +147,38 @@ app.get('/api/health', async (req, res) => {
     res.status(500).json({ status: 'ERROR', error: 'Database connection failed', details: error.message });
   }
 });
+
+// Mailer (lazy init)
+let mailer;
+function getMailer() {
+  if (mailer) return mailer;
+  const { SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS } = process.env;
+  if (!SMTP_HOST || !SMTP_PORT) return null;
+  mailer = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: Number(SMTP_PORT),
+    secure: String(SMTP_SECURE || 'false').toLowerCase() === 'true',
+    auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined
+  });
+  return mailer;
+}
+
+async function sendResetEmail(to, link) {
+  const transporter = getMailer();
+  if (!transporter) throw new Error('SMTP not configured');
+  const from = process.env.EMAIL_FROM || 'VolHelper <no-reply@example.com>';
+  await transporter.sendMail({
+    from,
+    to,
+    subject: 'Відновлення паролю — VolHelper',
+    html: `
+      <p>Вітаємо!</p>
+      <p>Ви запросили скидання паролю. Перейдіть за посиланням, щоб встановити новий пароль:</p>
+      <p><a href="${link}">${link}</a></p>
+      <p>Посилання дійсне протягом 30 хвилин. Якщо це були не ви — проігноруйте цей лист.</p>
+    `,
+  });
+}
 
 // Auth routes
 app.post('/api/auth/register', async (req, res) => {
@@ -279,6 +324,74 @@ app.get('/api/auth/profile', authRequired, async (req, res) => {
 
   } catch (error) {
     console.error('Profile error:', error);
+    res.status(500).json({ error: 'Серверна помилка' });
+  }
+});
+
+// Password reset: request
+app.post('/api/auth/forgot-password', apiLimiter, async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    // Always respond 200 to avoid user enumeration
+    const okResponse = () => res.json({ message: 'Якщо email існує, лист надіслано' });
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return okResponse();
+
+    const userRes = await pool.query('SELECT id, is_active FROM users WHERE email = $1', [email]);
+    if (userRes.rows.length === 0 || userRes.rows[0].is_active === false) return okResponse();
+
+    const userId = userRes.rows[0].id;
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expires = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    // Optional: invalidate previous tokens
+    await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1 OR expires_at < NOW()', [userId]);
+    await pool.query(
+      'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+      [userId, tokenHash, expires]
+    );
+
+    const base = process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const link = `${base}/reset-password?token=${rawToken}`;
+
+    try {
+      await sendResetEmail(email, link);
+    } catch (e) {
+      console.error('Email send error:', e.message);
+      // Still respond OK to avoid leaking info
+    }
+
+    return okResponse();
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.json({ message: 'Якщо email існує, лист надіслано' });
+  }
+});
+
+// Password reset: confirm
+app.post('/api/auth/reset-password', apiLimiter, async (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+    if (!token || !password || String(password).length < 6) {
+      return res.status(400).json({ error: 'Некоректні дані' });
+    }
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tRes = await pool.query(
+      'SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = $1',
+      [tokenHash]
+    );
+    if (tRes.rows.length === 0) return res.status(400).json({ error: 'Недійсне або прострочене посилання' });
+    const t = tRes.rows[0];
+    if (t.used_at) return res.status(400).json({ error: 'Токен вже використано' });
+    if (new Date(t.expires_at).getTime() < Date.now()) return res.status(400).json({ error: 'Токен прострочений' });
+
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(password, salt);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashed, t.user_id]);
+    await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [t.id]);
+    res.json({ message: 'Пароль оновлено' });
+  } catch (error) {
+    console.error('Reset password error:', error);
     res.status(500).json({ error: 'Серверна помилка' });
   }
 });
