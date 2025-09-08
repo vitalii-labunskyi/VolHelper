@@ -374,13 +374,13 @@ function showRequestModal(request) {
                         </div>
                         <div class="mt-3">
                             <textarea class="form-control" id="newNote" placeholder="Додати нотатку..."></textarea>
-                            <button class="btn btn-sm btn-primary mt-2" onclick="addNote('${request.id}')">Додати нотатку</button>
+                            <button class="btn btn-sm btn-primary mt-2 add-note-btn">Додати нотатку</button>
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
                     ${canChangeStatus(request) ? `
-                        <button type="button" class="btn btn-primary" onclick="updateRequestStatus('${request.id}')">Зберегти статус</button>
+                        <button type="button" class="btn btn-primary save-status-btn">Зберегти статус</button>
                     ` : ''}
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрити</button>
                 </div>
@@ -395,6 +395,22 @@ function showRequestModal(request) {
     modal.addEventListener('hidden.bs.modal', () => {
         document.body.removeChild(modal);
     });
+
+    // Wire modal buttons with submit lock to prevent double actions
+    const saveBtn = modal.querySelector('.save-status-btn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+            const wrapped = withSubmitLock(saveBtn, () => updateRequestStatus(request.id));
+            wrapped();
+        });
+    }
+    const addBtn = modal.querySelector('.add-note-btn');
+    if (addBtn) {
+        addBtn.addEventListener('click', () => {
+            const wrapped = withSubmitLock(addBtn, () => addNote(request.id));
+            wrapped();
+        });
+    }
 }
 
 function canChangeStatus(request) {
