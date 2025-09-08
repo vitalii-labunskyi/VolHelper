@@ -335,7 +335,7 @@ app.post('/api/requests', async (req, res) => {
 
 app.get('/api/requests', authRequired, async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, assigned } = req.query;
     let query = `
       SELECT 
         r.*,
@@ -346,12 +346,24 @@ app.get('/api/requests', authRequired, async (req, res) => {
       LEFT JOIN users u ON r.assigned_volunteer_id = u.id
     `;
     let params = [];
-    
+    const whereParts = [];
+
     if (status) {
-      query += ` WHERE r.status = $1`;
+      whereParts.push(`r.status = $${params.length + 1}`);
       params.push(status);
     }
-    
+    if (assigned === 'true') {
+      whereParts.push(`r.assigned_volunteer_id IS NOT NULL`);
+    } else if (assigned === 'false') {
+      whereParts.push(`r.assigned_volunteer_id IS NULL`);
+    } else if (assigned === 'me') {
+      whereParts.push(`r.assigned_volunteer_id = $${params.length + 1}`);
+      params.push(req.user.id);
+    }
+
+    if (whereParts.length) {
+      query += ' WHERE ' + whereParts.join(' AND ');
+    }
     query += ` ORDER BY r.created_at DESC`;
 
     const result = await pool.query(query, params);

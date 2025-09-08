@@ -264,6 +264,8 @@ async function loadRequests() {
         const params = new URLSearchParams();
         const statusFilter = document.getElementById('statusFilter').value;
         if (statusFilter) params.append('status', statusFilter);
+        const mine = document.getElementById('assignedMine');
+        if (mine && mine.checked) params.append('assigned', 'me');
         
         const requests = await apiRequest(`/requests?${params}`);
         displayRequests(requests);
@@ -281,11 +283,39 @@ function displayRequests(requests) {
     }
     
     requestsList.innerHTML = requests.map(request => {
-        const takeBtn = (request.status === 'new' && currentUser.role === 'volunteer')
-          ? `<button class=\"btn btn-sm btn-primary me-2\" data-action=\"assign\" data-id=\"${request.id}\">Взяти</button>`
-          : '';
+        const canTake = request.status === 'new' && (currentUser.role === 'volunteer' || currentUser.role === 'admin');
+        const isAssignedToMe = request.assignedVolunteerId && request.assignedVolunteerId === currentUser.id;
+        const canStart = (currentUser.role === 'admin' || isAssignedToMe) && (request.status === 'new' || request.status === 'assigned');
+        const canComplete = (currentUser.role === 'admin' || isAssignedToMe) && (request.status === 'in_progress' || request.status === 'assigned');
+        const canCancel = (currentUser.role === 'admin' || isAssignedToMe) && request.status !== 'completed';
+
         return `
-        <div class=\"card request-card priority-${request.priority} mb-3\">\n            <div class=\"card-body\">\n                <div class=\"d-flex justify-content-between align-items-start mb-2\">\n                    <h5 class=\"card-title mb-0\">${request.title}</h5>\n                    <span class=\"badge status-badge status-${request.status}\">${getStatusText(request.status)}</span>\n                </div>\n                <p class=\"text-muted mb-2\">\n                    <i class=\"fas fa-map-marker-alt me-1\"></i>${request.location.city}\n                    <span class=\"ms-3\"><i class=\"fas fa-tag me-1\"></i>${getCategoryText(request.category)}</span>\n                    <span class=\"ms-3\"><i class=\"fas fa-exclamation-triangle me-1\"></i>${getPriorityText(request.priority)}</span>\n                </p>\n                <p class=\"card-text\">${request.description.substring(0, 150)}${request.description.length > 150 ? '...' : ''}</p>\n                <div class=\"d-flex justify-content-between align-items-center\">\n                    <small class=\"text-muted\">\n                        <i class=\"fas fa-clock me-1\"></i>${new Date(request.createdAt).toLocaleDateString('uk')}\n                    </small>\n                    <div>\n                        ${takeBtn}\n                        <button class=\"btn btn-sm btn-outline-primary\" data-action=\"details\" data-id=\"${request.id}\">Деталі</button>\n                    </div>\n                </div>\n            </div>\n        </div>`;
+        <div class="card request-card priority-${request.priority} mb-3">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h5 class="card-title mb-0">${request.title}</h5>
+                    <span class="badge status-badge status-${request.status}">${getStatusText(request.status)}</span>
+                </div>
+                <p class="text-muted mb-2">
+                    <i class="fas fa-map-marker-alt me-1"></i>${request.location.city}
+                    <span class="ms-3"><i class="fas fa-tag me-1"></i>${getCategoryText(request.category)}</span>
+                    <span class="ms-3"><i class="fas fa-exclamation-triangle me-1"></i>${getPriorityText(request.priority)}</span>
+                </p>
+                <p class="card-text">${request.description.substring(0, 150)}${request.description.length > 150 ? '...' : ''}</p>
+                <div class="d-flex justify-content-between align-items-center">
+                    <small class="text-muted">
+                        <i class="fas fa-clock me-1"></i>${new Date(request.createdAt).toLocaleDateString('uk')}
+                    </small>
+                    <div>
+                        ${canTake ? `<button class="btn btn-sm btn-primary me-2" data-action="assign" data-id="${request.id}">Взяти</button>` : ''}
+                        ${canStart ? `<button class="btn btn-sm btn-warning me-2" data-action="start" data-id="${request.id}">В роботу</button>` : ''}
+                        ${canComplete ? `<button class="btn btn-sm btn-success me-2" data-action="complete" data-id="${request.id}">Завершити</button>` : ''}
+                        ${canCancel ? `<button class="btn btn-sm btn-outline-danger me-2" data-action="cancel" data-id="${request.id}">Скасувати</button>` : ''}
+                        <button class="btn btn-sm btn-outline-primary" data-action="details" data-id="${request.id}">Деталі</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
     }).join('');
 }
 
@@ -303,6 +333,12 @@ document.getElementById('requestsList').addEventListener('click', (e) => {
         wrapped();
     } else if (action === 'start') {
         const wrapped = withSubmitLock(btn, () => startWork(id));
+        wrapped();
+    } else if (action === 'complete') {
+        const wrapped = withSubmitLock(btn, () => setStatus(id, 'completed', 'Заявку завершено'));
+        wrapped();
+    } else if (action === 'cancel') {
+        const wrapped = withSubmitLock(btn, () => setStatus(id, 'cancelled', 'Заявку скасовано'));
         wrapped();
     }
 });
@@ -337,6 +373,19 @@ async function viewRequest(requestId) {
     try {
         const request = await apiRequest(`/requests/${requestId}`);
         showRequestModal(request);
+    } catch (error) {
+        showToast(error.message, 'danger');
+    }
+}
+
+async function setStatus(requestId, status, successMessage) {
+    try {
+        await apiRequest(`/requests/${requestId}/status`, {
+            method: 'PUT',
+            body: JSON.stringify({ status })
+        });
+        showInfoModal('Готово', successMessage || 'Статус оновлено');
+        loadRequests();
     } catch (error) {
         showToast(error.message, 'danger');
     }
