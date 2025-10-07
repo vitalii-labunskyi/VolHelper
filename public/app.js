@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+const API_BASE = window.API_BASE || '/api';
 let currentUser = null;
 let authToken = localStorage.getItem('authToken');
 
